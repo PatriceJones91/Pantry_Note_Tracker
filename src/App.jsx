@@ -122,6 +122,9 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(loggedInUser));
     setIdentifier("");
     setPassword("");
+    setSaving(false);
+    setMessage("");
+    setError("");
   }
 
   async function handleLogin(event) {
@@ -157,37 +160,43 @@ export default function App() {
 
   async function loadRows(currentParticipant) {
     setLoading(true);
+    setSaving(false);
     setError("");
     setMessage("");
 
-    const { data, error: loadError } = await supabase.rpc("activity1_load_rows", {
-      p_participant_id: currentParticipant.participantId,
-    });
+    try {
+      const { data, error: loadError } = await supabase.rpc("activity1_load_rows", {
+        p_participant_id: currentParticipant.participantId,
+      });
 
-    if (loadError) {
-      setError(loadError.message || "Could not load tracker rows.");
+      if (loadError) {
+        setError(loadError.message || "Could not load tracker rows.");
+        setRows(createStarterRows());
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        setRows(createStarterRows());
+      } else {
+        const savedRows = data.map((item, index) => ({
+          localId: item.id || crypto.randomUUID(),
+          row_order: item.row_order || index + 1,
+          item_name: item.item_name || "",
+          quantity: item.quantity || "",
+          unit: item.unit || "",
+          category: item.category || "",
+          expiration_date: item.expiration_date || "",
+          notes: item.notes || "",
+        }));
+        setRows(padRows(savedRows));
+      }
+    } catch (err) {
+      setError(err.message || "Could not load tracker rows.");
       setRows(createStarterRows());
+    } finally {
       setLoading(false);
-      return;
+      setSaving(false);
     }
-
-    if (!data || data.length === 0) {
-      setRows(createStarterRows());
-    } else {
-      const savedRows = data.map((item, index) => ({
-        localId: item.id || crypto.randomUUID(),
-        row_order: item.row_order || index + 1,
-        item_name: item.item_name || "",
-        quantity: item.quantity || "",
-        unit: item.unit || "",
-        category: item.category || "",
-        expiration_date: item.expiration_date || "",
-        notes: item.notes || "",
-      }));
-      setRows(padRows(savedRows));
-    }
-
-    setLoading(false);
   }
 
   function updateRow(localId, field, value) {
@@ -239,35 +248,39 @@ export default function App() {
     setError("");
     setMessage("");
 
-    const rowsToSave = rows
-      .map((row, index) => ({ ...row, row_order: index + 1 }))
-      .filter(rowHasContent)
-      .map((row) => ({
-        row_order: row.row_order,
-        item_name: row.item_name.trim() || null,
-        quantity: String(row.quantity ?? "").trim() || null,
-        unit: row.unit || null,
-        category: row.category || null,
-        expiration_date: row.expiration_date || null,
-        notes: row.notes.trim() || null,
-      }));
+    try {
+      const rowsToSave = rows
+        .map((row, index) => ({ ...row, row_order: index + 1 }))
+        .filter(rowHasContent)
+        .map((row) => ({
+          row_order: row.row_order,
+          item_name: row.item_name.trim() || null,
+          quantity: String(row.quantity ?? "").trim() || null,
+          unit: row.unit || null,
+          category: row.category || null,
+          expiration_date: row.expiration_date || null,
+          notes: row.notes.trim() || null,
+        }));
 
-    const { data: savedCount, error: saveError } = await supabase.rpc("activity1_save_rows", {
-      p_participant_id: participant.participantId,
-      p_username: participant.username || participant.displayName || participant.participantId,
-      p_rows: rowsToSave,
-    });
+      const { data: savedCount, error: saveError } = await supabase.rpc("activity1_save_rows", {
+        p_participant_id: participant.participantId,
+        p_username: participant.username || participant.displayName || participant.participantId,
+        p_rows: rowsToSave,
+      });
 
-    if (saveError) {
-      setError(saveError.message || "Could not save tracker rows.");
+      if (saveError) {
+        setError(saveError.message || "Could not save tracker rows.");
+        return;
+      }
+
+      const count = Number(savedCount ?? rowsToSave.length);
+      setRows(padRows(rowsToSave.map((row) => ({ ...row, localId: crypto.randomUUID() }))));
+      setMessage(`Saved ${count} item${count === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setError(err.message || "Could not save tracker rows.");
+    } finally {
       setSaving(false);
-      return;
     }
-
-    setRows(padRows(rowsToSave.map((row) => ({ ...row, localId: crypto.randomUUID() }))));
-    const count = Number(savedCount ?? rowsToSave.length);
-    setMessage(`Saved ${count} item${count === 1 ? "" : "s"}.`);
-    setSaving(false);
   }
 
   function logout() {
@@ -276,6 +289,9 @@ export default function App() {
     setRows(createStarterRows());
     setMessage("");
     setError("");
+    setLoading(false);
+    setCreating(false);
+    setSaving(false);
   }
 
   if (!participant) {
