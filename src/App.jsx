@@ -4,6 +4,8 @@ import { loginParticipant, registerParticipant } from "./lib/login";
 
 const STARTER_ROW_COUNT = 10;
 const STORAGE_KEY = "pantry_note_tracker_user";
+const SAVE_REQUEST_TIMEOUT_MS = 30000;
+const MAX_SAVE_ATTEMPTS = 3;
 
 const UNIT_OPTIONS = [
   "",
@@ -58,6 +60,10 @@ function createStarterRows() {
   return Array.from({ length: STARTER_ROW_COUNT }, (_, index) => makeBlankRow(index + 1));
 }
 
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
 function rowHasContent(row) {
   return [
     row.item_name,
@@ -66,7 +72,7 @@ function rowHasContent(row) {
     row.category,
     row.expiration_date,
     row.notes,
-  ].some((value) => String(value ?? "").trim() !== "");
+  ].some((value) => cleanText(value) !== "");
 }
 
 function padRows(rows) {
@@ -81,6 +87,38 @@ function padRows(rows) {
   }
 
   return cleanRows;
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeSavedRows(rows) {
+  return rows
+    .map((row, index) => ({ ...row, row_order: index + 1 }))
+    .filter(rowHasContent)
+    .map((row) => ({
+      row_order: row.row_order,
+      item_name: cleanText(row.item_name) || null,
+      quantity: cleanText(row.quantity) || null,
+      unit: cleanText(row.unit) || null,
+      category: cleanText(row.category) || null,
+      expiration_date: cleanText(row.expiration_date) || null,
+      notes: cleanText(row.notes) || null,
+    }));
+}
+
+function draftKey(participantId) {
+  return `pantry_note_tracker_draft_${participantId}`;
 }
 
 export default function App() {
@@ -111,25 +149,30 @@ export default function App() {
     if (participant?.participantId) {
       loadRows(participant);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [participant?.participantId]);
+
+  // Keep an automatic browser backup of everything currently typed.
+  useEffect(() => {
+    if (!participant?.participantId) return;
+    localStorage.setItem(draftKey(participant.participantId), JSON.stringify(rows));
+  }, [participant?.participantId, rows]);
 
   function finishAuth(loggedInUser) {
     if (loggedInUser.role === "admin") {
-      throw new Error("This tracker is for participant activity only. Please use a participant account.");
+      throw new Error("This tracker is for participant use only. Please use a participant account.");
     }
 
     setParticipant(loggedInUser);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(loggedInUser));
     setIdentifier("");
     setPassword("");
-    setSaving(false);
-    setMessage("");
-    setError("");
   }
 
   async function handleLogin(event) {
     event.preventDefault();
     setLoading(true);
+    setSaving(false);
     setError("");
     setMessage("");
 
@@ -145,6 +188,7 @@ export default function App() {
 
   async function handleCreateAccount() {
     setCreating(true);
+    setSaving(false);
     setError("");
     setMessage("");
 
@@ -159,25 +203,26 @@ export default function App() {
   }
 
   async function loadRows(currentParticipant) {
+    if (!currentParticipant?.participantId) return;
+
     setLoading(true);
-    setSaving(false);
     setError("");
     setMessage("");
 
     try {
-      const { data, error: loadError } = await supabase.rpc("activity1_load_rows", {
-        p_participant_id: currentParticipant.participantId,
-      });
+      const { data, error: loadError } = await withTimeout(
+        supabase.rpc("activity1_load_rows", {
+          p_participant_id: currentParticipant.participantId,
+        }),
+        SAVE_REQUEST_TIMEOUT_MS,
+        "The tracker took too long to load. Please refresh and try again."
+      );
 
       if (loadError) {
-        setError(loadError.message || "Could not load tracker rows.");
-        setRows(createStarterRows());
-        return;
+        throw new Error(loadError.message || "Could not load tracker rows.");
       }
 
-      if (!data || data.length === 0) {
-        setRows(createStarterRows());
-      } else {
+      if (data && data.length > 0) {
         const savedRows = data.map((item, index) => ({
           localId: item.id || crypto.randomUUID(),
           row_order: item.row_order || index + 1,
@@ -188,14 +233,35 @@ export default function App() {
           expiration_date: item.expiration_date || "",
           notes: item.notes || "",
         }));
+
         setRows(padRows(savedRows));
+        return;
+      }
+
+      const localDraft = localStorage.getItem(draftKey(currentParticipant.participantId));
+      if (localDraft) {
+        const parsedDraft = JSON.parse(localDraft);
+        setRows(padRows(parsedDraft));
+      } else {
+        setRows(createStarterRows());
       }
     } catch (err) {
-      setError(err.message || "Could not load tracker rows.");
-      setRows(createStarterRows());
+      const localDraft = localStorage.getItem(draftKey(currentParticipant.participantId));
+
+      if (localDraft) {
+        try {
+          setRows(padRows(JSON.parse(localDraft)));
+          setError(`${err.message || "Could not load saved rows."} Your typed entries were restored from this browser.`);
+        } catch {
+          setRows(createStarterRows());
+          setError(err.message || "Could not load tracker rows.");
+        }
+      } else {
+        setRows(createStarterRows());
+        setError(err.message || "Could not load tracker rows.");
+      }
     } finally {
       setLoading(false);
-      setSaving(false);
     }
   }
 
@@ -242,42 +308,65 @@ export default function App() {
   }
 
   async function saveRows() {
-    if (!participant?.participantId) return;
+    if (!participant?.participantId || saving) return;
+
+    const rowsToSave = normalizeSavedRows(rows);
 
     setSaving(true);
     setError("");
     setMessage("");
 
+    // Save a browser backup before contacting Supabase.
+    localStorage.setItem(draftKey(participant.participantId), JSON.stringify(rows));
+
+    let lastError = null;
+
     try {
-      const rowsToSave = rows
-        .map((row, index) => ({ ...row, row_order: index + 1 }))
-        .filter(rowHasContent)
-        .map((row) => ({
-          row_order: row.row_order,
-          item_name: row.item_name.trim() || null,
-          quantity: String(row.quantity ?? "").trim() || null,
-          unit: row.unit || null,
-          category: row.category || null,
-          expiration_date: row.expiration_date || null,
-          notes: row.notes.trim() || null,
-        }));
+      for (let attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt += 1) {
+        try {
+          const { data: savedCount, error: saveError } = await withTimeout(
+            supabase.rpc("activity1_save_rows", {
+              p_participant_id: participant.participantId,
+              p_username:
+                participant.username || participant.displayName || participant.participantId,
+              p_rows: rowsToSave,
+            }),
+            SAVE_REQUEST_TIMEOUT_MS,
+            `Save attempt ${attempt} took too long.`
+          );
 
-      const { data: savedCount, error: saveError } = await supabase.rpc("activity1_save_rows", {
-        p_participant_id: participant.participantId,
-        p_username: participant.username || participant.displayName || participant.participantId,
-        p_rows: rowsToSave,
-      });
+          if (saveError) {
+            throw new Error(saveError.message || "Could not save tracker rows.");
+          }
 
-      if (saveError) {
-        setError(saveError.message || "Could not save tracker rows.");
-        return;
+          const count = Number(savedCount ?? rowsToSave.length);
+
+          if (count !== rowsToSave.length) {
+            throw new Error(
+              `Supabase confirmed ${count} of ${rowsToSave.length} filled rows. Retrying the full tracker.`
+            );
+          }
+
+          setMessage(
+            `Saved ${count} item${count === 1 ? "" : "s"}. You may add more rows and save again.`
+          );
+          return;
+        } catch (attemptError) {
+          lastError = attemptError;
+
+          if (attempt < MAX_SAVE_ATTEMPTS) {
+            setMessage(`Save is taking longer than expected. Retrying automatically (${attempt + 1} of ${MAX_SAVE_ATTEMPTS})...`);
+            await wait(1000 * attempt);
+          }
+        }
       }
 
-      const count = Number(savedCount ?? rowsToSave.length);
-      setRows(padRows(rowsToSave.map((row) => ({ ...row, localId: crypto.randomUUID() }))));
-      setMessage(`Saved ${count} item${count === 1 ? "" : "s"}.`);
+      throw lastError || new Error("Could not save the tracker.");
     } catch (err) {
-      setError(err.message || "Could not save tracker rows.");
+      setMessage("");
+      setError(
+        `${err.message || "Could not save tracker rows."} Your entries are still on the screen and backed up in this browser. Click Save Tracker again when the connection is available.`
+      );
     } finally {
       setSaving(false);
     }
@@ -287,21 +376,21 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEY);
     setParticipant(null);
     setRows(createStarterRows());
-    setMessage("");
-    setError("");
     setLoading(false);
     setCreating(false);
     setSaving(false);
+    setMessage("");
+    setError("");
   }
 
   if (!participant) {
     return (
       <main className="page-shell login-shell">
         <section className="login-card">
-          <div className="plain-label">Activity 1</div>
+          <div className="plain-label">Study Task 1</div>
           <h1>Pantry Note Tracker</h1>
           <p className="login-copy">
-            Manual pantry tracking for this activity. Use the same study username and password for each activity.
+            Create your study account or sign in with the same username and password you will use for Smart Pantry.
           </p>
 
           <form onSubmit={handleLogin} className="login-form">
@@ -342,7 +431,7 @@ export default function App() {
             </button>
 
             <p className="small-help-text">
-              New participants should create one username they can remember, then reuse that same login for Smart Pantry later.
+              New participants should create one username they can remember and reuse that same login for Smart Pantry later.
             </p>
           </form>
         </section>
@@ -355,10 +444,13 @@ export default function App() {
       <section className="tracker-card">
         <header className="tracker-header">
           <div>
-            <div className="plain-label">Activity 1: Manual Ingredient Tracking</div>
-            <h1>Pantry Note Tracker</h1>
+            <div className="plain-label">Study Task 1: Pantry Note Tracker</div>
+            <h1>BUILD YOUR PANTRY</h1>
             <p>
-              Type your items below like a simple paper list or spreadsheet. Save when you are finished.
+              Create and organize your pantry inventory by entering the food items currently stored in your pantry, refrigerator, and freezer. Save your entries when you are finished.
+            </p>
+            <p className="small-help-text">
+              Please add an expiration date when you know it. If you are unsure, use your best estimate or add a short note.
             </p>
             <p className="participant-line">Logged in as: {participant.displayName}</p>
           </div>
@@ -368,10 +460,10 @@ export default function App() {
 
         <div className="toolbar">
           <button className="primary-button" onClick={saveRows} disabled={saving || loading}>
-            {saving ? "Saving..." : "Save Tracker"}
+            {saving ? "Saving Tracker..." : "Save Tracker"}
           </button>
-          <button className="secondary-button" onClick={addRow}>+ Add Row</button>
-          <button className="secondary-button" onClick={removeExtraBlankRows}>Clean Blank Rows</button>
+          <button className="secondary-button" onClick={addRow} disabled={saving}>+ Add Row</button>
+          <button className="secondary-button" onClick={removeExtraBlankRows} disabled={saving}>Clean Blank Rows</button>
           <span className="row-count">Filled rows: {filledRowCount}</span>
         </div>
 
@@ -446,7 +538,7 @@ export default function App() {
                     />
                   </td>
                   <td className="action-col">
-                    <button className="small-button" onClick={() => clearRow(row.localId)}>Clear</button>
+                    <button className="small-button" onClick={() => clearRow(row.localId)} disabled={saving}>Clear</button>
                   </td>
                 </tr>
               ))}
@@ -455,9 +547,9 @@ export default function App() {
         </div>
 
         <div className="bottom-actions">
-          <button className="secondary-button" onClick={addRow}>+ Add Another Row</button>
+          <button className="secondary-button" onClick={addRow} disabled={saving}>+ Add Another Row</button>
           <button className="primary-button" onClick={saveRows} disabled={saving || loading}>
-            {saving ? "Saving..." : "Save Tracker"}
+            {saving ? "Saving Tracker..." : "Save Tracker"}
           </button>
         </div>
       </section>

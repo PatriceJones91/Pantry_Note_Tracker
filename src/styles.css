@@ -274,3 +274,107 @@ button:disabled {
   font-size: 0.85rem;
   line-height: 1.4;
 }
+/* Keep the full page inside the phone screen */
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Button section */
+.tracker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+
+/* Allow only the tracker table to scroll sideways */
+.tracker-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Keep the table fields usable */
+.tracker-table {
+  width: 100%;
+  min-width: 850px;
+  border-collapse: collapse;
+}
+
+.tracker-table input,
+.tracker-table select,
+.tracker-table textarea {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Tablet and phone */
+@media screen and (max-width: 768px) {
+  main,
+  .tracker-container,
+  .tracker-card {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .tracker-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .tracker-actions button {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 14px 8px;
+    font-size: 17px;
+  }
+
+  .tracker-actions button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .tracker-table-scroll {
+    margin-top: 16px;
+  }
+
+  .tracker-table input,
+  .tracker-table select {
+    font-size: 16px;
+    padding: 10px;
+  }
+}
+
+/* Smaller phones */
+@media screen and (max-width: 480px) {
+  .tracker-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .tracker-actions button:last-child {
+    grid-column: auto;
+  }
+
+  .tracker-table {
+    min-width: 800px;
+  }
+}
