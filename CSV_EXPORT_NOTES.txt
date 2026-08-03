@@ -1,0 +1,18 @@
+CSV Export added to Pantry Note Tracker
+
+Buttons:
+- Export CSV appears in the top toolbar and bottom action area.
+- The button is enabled after at least one row contains data.
+
+Exported columns:
+item_name, quantity, unit, category, expiration_date, notes
+
+Filename format:
+smart-pantry-import_<participant>_<YYYY-MM-DD>.csv
+
+Behavior:
+- Only rows containing pantry data are exported.
+- All values are safely quoted for CSV.
+- The file uses UTF-8 encoding for compatibility with Excel and Smart Pantry.
+
+Smart Pantry must use these same header names in its CSV importer, or map these headers during import.

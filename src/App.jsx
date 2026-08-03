@@ -117,6 +117,19 @@ function normalizeSavedRows(rows) {
     }));
 }
 
+
+function escapeCsvValue(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function safeFilePart(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "participant";
+}
+
 function draftKey(participantId) {
   return `pantry_note_tracker_draft_${participantId}`;
 }
@@ -372,6 +385,56 @@ export default function App() {
     }
   }
 
+
+  function exportCsv() {
+    const exportRows = normalizeSavedRows(rows);
+
+    setError("");
+    setMessage("");
+
+    if (exportRows.length === 0) {
+      setError("Add at least one pantry item before exporting a CSV file.");
+      return;
+    }
+
+    const headers = [
+      "item_name",
+      "quantity",
+      "unit",
+      "category",
+      "expiration_date",
+      "notes",
+    ];
+
+    const csvLines = [
+      headers.join(","),
+      ...exportRows.map((row) =>
+        headers.map((header) => escapeCsvValue(row[header] ?? "")).join(",")
+      ),
+    ];
+
+    // UTF-8 BOM helps Excel preserve punctuation and special characters.
+    const csvBlob = new Blob(["\uFEFF", csvLines.join("\r\n")], {
+      type: "text/csv;charset=utf-8",
+    });
+    const downloadUrl = URL.createObjectURL(csvBlob);
+    const link = document.createElement("a");
+    const participantName =
+      participant.username || participant.displayName || participant.participantId;
+    const dateStamp = new Date().toISOString().slice(0, 10);
+
+    link.href = downloadUrl;
+    link.download = `smart-pantry-import_${safeFilePart(participantName)}_${dateStamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
+
+    setMessage(
+      `Exported ${exportRows.length} pantry item${exportRows.length === 1 ? "" : "s"} to CSV for Smart Pantry.`
+    );
+  }
+
   function logout() {
     localStorage.removeItem(STORAGE_KEY);
     setParticipant(null);
@@ -464,6 +527,9 @@ export default function App() {
           </button>
           <button className="secondary-button" onClick={addRow} disabled={saving}>+ Add Row</button>
           <button className="secondary-button" onClick={removeExtraBlankRows} disabled={saving}>Clean Blank Rows</button>
+          <button className="secondary-button export-button" onClick={exportCsv} disabled={saving || loading || filledRowCount === 0}>
+            Export CSV
+          </button>
           <span className="row-count">Filled rows: {filledRowCount}</span>
         </div>
 
@@ -548,6 +614,9 @@ export default function App() {
 
         <div className="bottom-actions">
           <button className="secondary-button" onClick={addRow} disabled={saving}>+ Add Another Row</button>
+          <button className="secondary-button export-button" onClick={exportCsv} disabled={saving || loading || filledRowCount === 0}>
+            Export CSV
+          </button>
           <button className="primary-button" onClick={saveRows} disabled={saving || loading}>
             {saving ? "Saving Tracker..." : "Save Tracker"}
           </button>
