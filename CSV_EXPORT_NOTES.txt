@@ -8,7 +8,7 @@ Exported columns:
 item_name, quantity, unit, category, expiration_date, notes
 
 Filename format:
-smart-pantry-import_<participant>_<YYYY-MM-DD>.csv
+pantry_note_tracker_<participant>_<YYYY-MM-DD>.csv
 
 Behavior:
 - Only rows containing pantry data are exported.

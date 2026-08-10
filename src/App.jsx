@@ -424,7 +424,7 @@ export default function App() {
     const dateStamp = new Date().toISOString().slice(0, 10);
 
     link.href = downloadUrl;
-    link.download = `smart-pantry-import_${safeFilePart(participantName)}_${dateStamp}.csv`;
+    link.download = `pantry_note_tracker_${safeFilePart(participantName)}_${dateStamp}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
