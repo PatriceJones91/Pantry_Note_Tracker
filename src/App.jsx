@@ -431,7 +431,7 @@ export default function App() {
     URL.revokeObjectURL(downloadUrl);
 
     setMessage(
-      `Exported ${exportRows.length} pantry item${exportRows.length === 1 ? "" : "s"} to CSV for Smart Pantry.`
+      `Exported ${exportRows.length} pantry item${exportRows.length === 1 ? "" : "s"} to CSV for Pantry Recommendation Tool.`
     );
   }
 
